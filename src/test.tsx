@@ -1,5 +1,5 @@
 import classNames from "classnames";
-import { ReactNode, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ReactNode, useCallback, useEffect, useRef, useState } from "react";
 
 const query = {
   article: {
@@ -101,61 +101,74 @@ type SectionPosition = {
 
 const Test = () => {
   const [currentMovie, setCurrentMovie] = useState(0);
-  const containerRef = useRef<HTMLDivElement>(null);
   const positionsRef = useRef<Record<number, SectionPosition>>({});
 
-  const updatePositionInfo = useMemo(
-    () =>
-      (id: number, { yEnd, yStart }: SectionPosition) => {
-        if (!containerRef.current) return;
-        const { scrollTop } = containerRef.current;
-        positionsRef.current[id] = { yEnd: yEnd + scrollTop, yStart: yStart + scrollTop };
-      },
-    [],
-  );
+  const updatePositionInfo = useCallback((id: number, { yEnd, yStart }: SectionPosition) => {
+    const newYEnd = yEnd + window.scrollY;
+    const newYStart = yStart + window.scrollY;
+    if (id == 2) {
+      console.log("UPDATE", { yEnd, yStart });
+      console.log("UPDATE", { scrollY: window.scrollY });
+    }
 
-  console.log("---------- RENDER ----------");
+    positionsRef.current[id] = { yEnd: newYEnd, yStart: newYStart };
+  }, []);
+
   const scrollToMovie = (id: number) => {
-    if (!containerRef.current || !positionsRef.current[id]) return;
-
-    containerRef.current.scrollTo({
-      top: positionsRef.current[id].yStart,
-      behavior: "smooth",
+    const top = Math.floor(positionsRef.current[id].yStart - (innerHeight - (positionsRef.current[id].yEnd - positionsRef.current[id].yStart)) / 2);
+    console.log("SCROLL TO");
+    console.log("SCROLL TO", {
+      YSTART: positionsRef.current[id].yStart,
+      YEND: positionsRef.current[id].yEnd,
     });
+
+    window.scrollTo({ top, behavior: "smooth" });
   };
 
   const {
     article: { content, image, subtitle, title },
   } = query;
 
-  const handleScroll = () => {
-    if (!containerRef.current) return;
-    const { scrollTop } = containerRef.current;
-
-    const screenCenter = scrollTop + window.innerHeight / 2;
+  const handleScroll = useCallback(() => {
+    const screenCenter = window.scrollY + window.innerHeight / 2;
 
     const movies = Object.entries(positionsRef.current);
+    if (!movies.length) return;
 
     const idsPosition = movies.find(([, { yEnd, yStart }]) => yStart < screenCenter && screenCenter < yEnd);
-    const isCurrentMovieFirst = parseInt(movies[0][0]) === currentMovie;
-    const isCurrentMovieLast = parseInt(movies[movies.length - 1][0]) === currentMovie;
+    const isCurrentMovieFirst = parseInt(movies[0][0]) === currentMovie && movies[0][1].yStart > screenCenter;
+    const isCurrentMovieLast = parseInt(movies[movies.length - 1][0]) === currentMovie && movies[movies.length - 1][1].yEnd < screenCenter;
 
     if (!idsPosition && isCurrentMovieFirst) return setCurrentMovie(-1);
     if (!idsPosition && isCurrentMovieLast) return setCurrentMovie(Infinity);
     if (idsPosition) return setCurrentMovie(parseInt(idsPosition[0]));
-  };
+  }, [currentMovie]);
+
+  const handleScrollEnd = useCallback(() => {
+    if (!positionsRef.current[currentMovie]) return;
+    const top = Math.floor(
+      positionsRef.current[currentMovie].yStart -
+        (innerHeight - (positionsRef.current[currentMovie].yEnd - positionsRef.current[currentMovie].yStart)) / 2,
+    );
+    if (top === window.scrollY) return;
+
+    window.scrollTo({ top, behavior: "smooth" });
+  }, [currentMovie]);
 
   const movies = content.map(({ title, year, image, id }) => ({ title, year, image, id }));
   const currentMovieIndex =
     currentMovie === -1 ? currentMovie : currentMovie === Infinity ? movies.length : movies.findIndex(({ id }) => id === currentMovie);
 
+  useEffect(() => {
+    window.addEventListener("scroll", handleScroll);
+
+    return () => {
+      window.removeEventListener("scroll", handleScroll);
+    };
+  }, [handleScroll, handleScrollEnd]);
   return (
-    <div className="overflow-hidden bg-gray-950 font-serif text-gray-200">
-      <div
-        ref={containerRef}
-        onScroll={handleScroll}
-        className=" relative flex h-screen w-screen snap-y snap-mandatory flex-col gap-24 overflow-x-hidden overflow-y-scroll"
-      >
+    <>
+      <div className="flex w-screen flex-col gap-24" style={{ overflow: "unset" }}>
         <ArticleHeaderSection title={title} subtitle={subtitle} image={image} />
         {content.map((props) => (
           <FilmOfTheWeek
@@ -170,7 +183,7 @@ const Test = () => {
             <h3 className="text-3xl font-bold">Vue dans l'article</h3>
             <div className="h-[1px] flex-1 bg-white" />
           </div>
-          <div className="flex w-full  max-w-2xl snap-center flex-wrap justify-between gap-y-12 lg:max-w-3xl">
+          <div className="flex w-full  max-w-2xl flex-wrap justify-between gap-y-12 lg:max-w-3xl">
             {movies.map(({ image, title }) => (
               <div key={title} className="flex flex-col items-center gap-4">
                 <FilmPoster image={image} className="h-[250px] lg:h-[300px]" />
@@ -181,12 +194,12 @@ const Test = () => {
         </div>
       </div>
       <MoviesCarousel currentIndex={currentMovieIndex} onClick={scrollToMovie} movies={movies} />
-    </div>
+    </>
   );
 };
 
 const ArticleHeaderSection = ({ image, subtitle, title }: { image: string; title: string; subtitle: string }) => (
-  <div className="relative z-10 flex h-full max-h-screen w-full flex-shrink-0 snap-start flex-col bg-gray-950 ">
+  <div className="relative z-10 flex h-screen max-h-screen w-full flex-shrink-0 flex-col bg-gray-950 ">
     <div className={classNames("relative w-full flex-1 bg-cover bg-top")} style={{ backgroundImage: `url(${image})` }}>
       <div className="absolute bottom-[-2px] h-3/4 w-full bg-gradient-to-b from-transparent to-gray-950" />
     </div>
@@ -222,20 +235,30 @@ const FilmOfTheWeek = ({
 }) => {
   const ref = useRef<HTMLDivElement>(null);
 
-  useLayoutEffect(() => {
+  useEffect(() => {
+    const localRef = ref.current;
+    if (!localRef) return;
     const handleSize = () => {
-      if (!ref.current) return;
-      const { y, height } = ref.current.getBoundingClientRect();
+      if (!localRef) return;
+      if (id == 2) {
+        console.log("LA");
+      }
+
+      const { y, height } = localRef.getBoundingClientRect();
 
       updatePositionInfo(id, { yStart: y, yEnd: y + height });
     };
+
     handleSize();
+
     window.addEventListener("resize", handleSize);
-    return () => window.removeEventListener("resize", handleSize);
+    return () => {
+      window.removeEventListener("resize", handleSize);
+    };
   }, [updatePositionInfo, id]);
 
   return (
-    <div ref={ref} className="w-full max-w-3xl snap-center  self-center md:pl-8 lg:pl-0">
+    <div ref={ref} className="w-full max-w-3xl self-center  bg-red-500 md:pl-8 lg:pl-0">
       <div
         className={classNames("relative flex max-w-md flex-col gap-4 pl-6 font-serif transition-all duration-300 lg:max-w-lg", {
           "scale-90 opacity-75": !selected,
